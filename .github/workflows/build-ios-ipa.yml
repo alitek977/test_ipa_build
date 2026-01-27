@@ -1,0 +1,86 @@
+name: Build iOS unsigned IPA (Expo prebuild)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Expo prebuild (iOS)
+        run: npx expo prebuild -p ios --non-interactive
+
+      - name: Install CocoaPods
+        run: |
+          cd ios
+          pod install
+
+      - name: Detect workspace & scheme
+        id: detect
+        shell: bash
+        run: |
+          set -e
+          WORKSPACE="$(ls ios/*.xcworkspace | head -n 1)"
+          echo "workspace=$WORKSPACE" >> "$GITHUB_OUTPUT"
+
+          SCHEME="$(xcodebuild -list -workspace "$WORKSPACE" | awk '/Schemes:/{flag=1;next} flag && NF{print $1; exit}')"
+          echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
+
+          echo "Detected workspace: $WORKSPACE"
+          echo "Detected scheme: $SCHEME"
+
+      - name: Build unsigned .app (Release, iphoneos)
+        shell: bash
+        run: |
+          set -e
+          WORKSPACE="${{ steps.detect.outputs.workspace }}"
+          SCHEME="${{ steps.detect.outputs.scheme }}"
+
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            ENABLE_BITCODE=NO
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          set -e
+          APP_PATH="$(find build/Build/Products -maxdepth 2 -type d -name "*.app" | head -n 1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "❌ Could not find .app product"
+            find build -maxdepth 5 -type d -name "*.app" || true
+            exit 1
+          fi
+
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+
+          IPA_NAME="PowerPlantCalculations-unsigned.ipa"
+          /usr/bin/zip -r "$IPA_NAME" Payload
+          echo "✅ Created $IPA_NAME"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa-unsigned
+          path: PowerPlantCalculations-unsigned.ipa
