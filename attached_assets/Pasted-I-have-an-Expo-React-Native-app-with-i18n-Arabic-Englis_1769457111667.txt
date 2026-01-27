@@ -1,0 +1,48 @@
+I have an Expo (React Native) app with i18n (Arabic + English). I want the entire app layout to switch direction (RTL/LTR) automatically when the language changes — including bottom tab buttons, text alignment, icons/chevrons, paddings/margins where needed, and overall UI mirroring.
+
+Goal:
+- When language = Arabic -> RTL
+- When language = English -> LTR
+- The change should be applied app-wide and be consistent.
+
+Requirements:
+1) Use Expo-compatible approach (no native-only steps unless absolutely required).
+2) Implement a central "direction manager":
+   - Detect current language from the i18n setup (e.g., i18next / expo-localization / react-i18next).
+   - isRTL = language starts with "ar" (and optionally other RTL langs).
+3) Apply direction across the app:
+   - Use I18nManager.forceRTL(isRTL) and I18nManager.allowRTL(true).
+   - Update React Navigation to respect direction for:
+     - Bottom tabs order
+     - Header back button direction and gestures
+4) Because I18nManager changes typically require a reload:
+   - When language is changed in Settings, prompt the user and then reload the app automatically.
+   - Use expo-updates (Updates.reloadAsync) if available; otherwise use a safe fallback.
+5) Styling updates:
+   - Create shared helpers:
+     - textAlign: isRTL ? "right" : "left"
+     - flexDirection: isRTL ? "row-reverse" : "row"
+     - alignItems/justifyContent where relevant
+   - Refactor key screens/components (especially bottom tab screens, headers, and forms) to use these helpers and avoid hardcoded left/right.
+6) Fix the known issue:
+   - When switching EN -> AR -> EN, the app must NOT go white / crash.
+   - Ensure the direction switch is stable with a controlled reload and no invalid cached state.
+7) Persist selected language in AsyncStorage, and on app start:
+   - Load language first
+   - Apply RTL/LTR
+   - Then render navigation (avoid flicker)
+
+Deliverables:
+- Identify and modify the exact files:
+  - i18n config file (where language is set)
+  - Settings screen language selector
+  - App.tsx / Root wrapper (where RTL is applied before UI renders)
+  - Navigation setup (tabs + stack)
+  - Shared UI style helpers (e.g., src/i18n/direction.ts or src/theme/layout.ts)
+- Provide final copy-paste-ready code.
+- Explain briefly why reload is needed and how you implemented it.
+
+Constraints:
+- Do NOT remove existing features (Supabase, Excel export).
+- Keep UI changes minimal except for required RTL/LTR correctness.
+- Must work on Expo Go and built APK.

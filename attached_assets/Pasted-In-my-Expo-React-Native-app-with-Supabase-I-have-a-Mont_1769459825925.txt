@@ -1,0 +1,42 @@
+In my Expo (React Native) app with Supabase, I have a "Monthly Statistics" section that shows aggregated values (number of days, production totals, etc.). 
+I want: when the user taps the Monthly Statistics card/section, open a modal (or bottom sheet) that lists ALL saved days for the currently selected month.
+
+UI/UX requirements:
+1) Tap Monthly Statistics -> open a modal (nice UI, supports dark/light mode if available).
+2) Inside modal:
+   - Show a scrollable list of saved days for that month (sorted descending by date).
+   - Each row shows:
+     - date_key (YYYY-MM-DD)
+     - key summary numbers for that day (e.g., production, hours, gas, or whatever is available in our schema)
+   - Each row has a "Delete" button (trash icon is fine).
+3) Delete behavior:
+   - Confirm before deleting (Alert: "Delete this day? This cannot be undone.").
+   - On confirm, delete all data for that day so it becomes "as if it was never written":
+     - Delete from feeders where daily_data_id = selected day id
+     - Delete from turbines where daily_data_id = selected day id
+     - Delete from daily_data where id = selected day id
+   - Ensure deletions respect RLS (user can only delete their own data).
+4) After deleting:
+   - Immediately refresh the modal list (removed day disappears).
+   - Immediately refresh Monthly Statistics totals (days count and totals update without needing app restart).
+   - Show a single success message (no duplicates).
+5) Loading states:
+   - While fetching month days: show spinner/skeleton.
+   - While deleting: disable the delete button for that row (or show "Deleting...").
+6) Data fetching:
+   - Query Supabase to get all daily_data rows for current user and current month.
+   - If needed, join/compute the day summary from existing stored fields.
+   - IMPORTANT: date_key is stored as "YYYY-MM-DD" string. Filter by month safely:
+     - Compute monthStart and monthEnd strings (YYYY-MM-01 .. nextMonthStart) and query:
+       .gte("date_key", monthStart).lt("date_key", nextMonthStart)
+7) Code structure:
+   - Create a reusable component: MonthDaysModal (or MonthlyDaysListModal).
+   - Keep existing logic intact; integrate by calling openModal from Monthly Statistics onPress.
+8) Provide:
+   - Exact file paths changed
+   - Final copy-paste-ready code
+   - Brief explanation of the Supabase queries and deletion flow
+
+Constraints:
+- Do not remove existing features (guest auth, Excel export, etc.).
+- Must work in Expo Go and built APK.

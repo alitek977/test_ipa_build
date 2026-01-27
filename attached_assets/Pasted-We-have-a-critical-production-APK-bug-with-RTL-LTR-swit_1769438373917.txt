@@ -1,0 +1,47 @@
+We have a critical production APK bug with RTL/LTR switching:
+
+Symptoms:
+- On fresh install, UI direction is RTL (bottom tabs right-to-left) even though language starts in English.
+- Switching to Arabic keeps tabs as-is (sometimes ok).
+- Switching back to English causes the app to become a white screen and it never recovers even after force close; only uninstall/reinstall fixes it.
+- Repeating the toggle reproduces the failure.
+
+Goal:
+Make language and UI direction ALWAYS consistent and prevent any reload loops/crashes.
+When direction must change (ar <-> en), do exactly one safe reload, and block rendering until initialization completes.
+
+Required implementation:
+1) In LanguageContext (or a dedicated RTL bootstrap module):
+   - Persist language in AsyncStorage key: "lang" (existing).
+   - ALSO persist applied direction in AsyncStorage key: "dir" with values "rtl" or "ltr".
+2) On app startup (before rendering Navigation):
+   - Read "lang" (default "en").
+   - Compute shouldBeRTL = (lang === "ar").
+   - Compute targetDir = shouldBeRTL ? "rtl" : "ltr".
+   - Read stored "dir".
+   - If I18nManager.isRTL does NOT match shouldBeRTL:
+       a) Call I18nManager.allowRTL(true)
+       b) Call I18nManager.forceRTL(shouldBeRTL)
+       c) Call I18nManager.swapLeftAndRightInRTL(true)
+       d) Save AsyncStorage "dir" = targetDir
+       e) Trigger ONE reload using expo-updates: await Updates.reloadAsync()
+     IMPORTANT: Protect against infinite loops:
+       - If stored "dir" already equals targetDir AND mismatch still happens, DO NOT reload again.
+       - Instead render a fallback screen telling user to restart.
+   - Only set isReady=true AFTER direction matches, then render the app.
+3) On language switch:
+   - Save "lang"
+   - If direction changes (ar<->en), show a short alert "سيتم إعادة تشغيل التطبيق لتطبيق اتجاه اللغة"
+   - Apply I18nManager changes and save "dir"
+   - Call Updates.reloadAsync() once
+   - If direction does not change (e.g. en->en), do not reload.
+4) Fix Bottom Tab order:
+   - Drive it ONLY from I18nManager.isRTL after initialization.
+   - Add key at NavigationContainer: key={I18nManager.isRTL ? "rtl-nav" : "ltr-nav"} to force full remount.
+5) Ensure no RTL functions are called during render; only inside useEffect / init function.
+6) Deliverables:
+   - List exact files changed (App.tsx / NavigationContainer file, LanguageContext, maybe a new rtl.ts helper)
+   - Provide code diff
+   - Confirm production build no longer white-screens and persists correctly after app restart.
+
+Do not change units or business calculations.

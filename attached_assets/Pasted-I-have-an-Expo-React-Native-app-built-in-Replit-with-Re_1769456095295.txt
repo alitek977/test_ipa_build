@@ -1,0 +1,41 @@
+I have an Expo (React Native) app (built in Replit) with React Navigation. I want to add a Dark Mode feature with a Settings option.
+
+Goals:
+- Add 3 theme modes: "System" (default), "Light", "Dark".
+- Default should follow the device theme automatically (System).
+- If user selects Light/Dark, persist the choice and override system.
+- Improve and unify colors across the app for both light and dark modes (background, cards, text, muted text, borders, primary buttons).
+- Ensure React Navigation (stack header + tab bar) colors update correctly with the selected theme.
+
+Requirements:
+1) Use Expo-compatible libraries only.
+2) Persist theme choice using @react-native-async-storage/async-storage.
+3) Create a ThemeProvider context/hook:
+   - mode: "system" | "light" | "dark"
+   - isDark: boolean (resolved)
+   - colors: theme color palette
+   - setMode(mode)
+4) Use useColorScheme() to detect system theme when mode="system".
+5) Wrap the entire app (NavigationContainer included) with ThemeProvider.
+6) Integrate with React Navigation theme:
+   - Provide NavigationContainer a theme object that matches the selected mode.
+   - Make header style, header tint, tab bar background, tab bar active/inactive colors match the palette.
+7) Add a "Theme" section in Settings screen:
+   - Radio-like options: System / Light / Dark
+   - Show checkmark on selected option
+   - Text should be readable in both modes
+8) Refactor shared UI styles to use colors from useTheme() (at least main screens + common buttons/cards).
+9) Do NOT change existing app logic/features (Supabase, export, calculations). Only theming + Settings UI.
+
+Deliverables:
+- List the exact files you modified (with paths).
+- Provide final code changes (copy-paste ready).
+- If any file is missing (e.g., Settings screen doesn’t exist), create it and add it to navigation.
+- Make sure it works in Expo Go and APK.
+
+Suggested structure (you can adjust to match project):
+- src/theme/colors.ts
+- src/theme/ThemeProvider.tsx
+- App.tsx or src/Root.tsx (wrap provider)
+- Navigation setup file (use dynamic theme)
+- SettingsScreen.tsx (add Theme section)

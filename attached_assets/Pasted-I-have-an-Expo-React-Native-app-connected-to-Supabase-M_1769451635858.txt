@@ -1,0 +1,60 @@
+I have an Expo (React Native) app connected to Supabase. My database tables use user_id references to auth.users and I rely on RLS policies.
+
+I want the app to work in two modes:
+1) Guest mode (no visible login screen): the app should silently sign the user in as a guest so all inserts/reads work normally with user_id and RLS.
+2) Full account mode (optional from Settings): the user can later sign up / sign in with email & password, and keep their existing data if possible.
+
+Please implement the following:
+
+A) Silent Guest Auth (Preferred)
+- On app start, check current session:
+  - const { data: { session } } = await supabase.auth.getSession()
+- If session exists -> go to the main app.
+- If session is null -> perform guest sign-in silently:
+  - Try Supabase Anonymous Sign-In (if supported/enabled in this project).
+  - If anonymous sign-in is not supported, implement fallback "Guest via generated email":
+    - Generate a stable device-based guest identifier (store in AsyncStorage).
+    - Use it to create a deterministic guest email like:
+      guest_<uuid>@example.local
+    - Auto signUp or signIn with a generated password stored securely in AsyncStorage.
+  - After successful guest auth, proceed to main app.
+
+B) Settings Screen: Upgrade to Full Account
+- Add a Settings option:
+  - "Create account / Sign in"
+- When the user chooses:
+  - Provide Email + Password sign up/sign in UI.
+- After successful full login, ensure app uses that session and continues working.
+
+C) Data Ownership / Migration
+- Because existing data is tied to the guest user_id:
+  - If using true anonymous auth and Supabase supports account linking, link the anonymous user to the new credentials if possible.
+  - Otherwise implement a migration function:
+    - After full login, copy/transfer rows from old guest user_id to new user_id for these tables:
+      daily_data, feeders, turbines, profiles
+    - Update user_id fields accordingly.
+    - Ensure this is done securely (prefer a Supabase Edge Function with service_role, NOT exposing service_role in the client).
+  - If migration is too complex, implement simpler behavior:
+    - Keep guest data under guest account and inform the user (but prefer migration if possible).
+
+D) RLS Compatibility
+- Keep RLS enabled.
+- Ensure guest sessions can insert/select their own rows.
+- Add or adjust policies so rows are accessible only when:
+  user_id = auth.uid()
+
+E) Code / Files
+- Show exactly which files you changed with paths.
+- Provide final copy-paste-ready code for:
+  - supabase client initialization
+  - auth bootstrap (guest session)
+  - settings auth screen
+  - optional migration / edge function (if needed)
+
+Constraints:
+- Do not use service_role key in the mobile app.
+- Must work in Expo Go and built APK.
+- Do not change existing app UI except adding the Settings auth option and necessary navigation.
+
+Also:
+- Explain briefly which approach you used (Anonymous or fallback guest email) and why.
