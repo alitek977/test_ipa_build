@@ -1,4 +1,4 @@
-name: Build iOS unsigned IPA (Expo prebuild)
+name: Build iOS unsigned IPA (Expo EAS local)
 
 on:
   workflow_dispatch:
@@ -17,77 +17,39 @@ jobs:
           node-version: 20
           cache: npm
 
-      - name: Install deps
+      - name: Install dependencies
         run: npm ci
+
+      - name: Install Expo CLI & EAS
+        run: npm install -g expo-cli eas-cli
 
       - name: Expo prebuild (iOS)
         run: npx expo prebuild -p ios --non-interactive
 
-      - name: Install CocoaPods
+      - name: Build iOS app (unsigned, local)
         run: |
-          cd ios
-          pod install
-          cd ..
+          eas build \
+            --platform ios \
+            --profile development \
+            --local \
+            --non-interactive \
+            --clear-cache
 
-      - name: Build unsigned .app (Release, iphoneos)
+      - name: Find IPA
         shell: bash
         run: |
           set -e
-
-          WORKSPACE="$(ls ios/*.xcworkspace | head -n 1)"
-          if [ -z "$WORKSPACE" ]; then
-            echo "❌ No .xcworkspace found in ios/"
-            ls -la ios
+          IPA_PATH="$(find . -type f -name "*.ipa" | head -n 1)"
+          if [ -z "$IPA_PATH" ]; then
+            echo "❌ No IPA found"
+            find . -type f | grep ipa || true
             exit 1
           fi
-
-          SCHEME="$(xcodebuild -list -workspace "$WORKSPACE" | awk '/Schemes:/{flag=1;next} flag && NF{print $1; exit}')"
-          if [ -z "$SCHEME" ]; then
-            echo "❌ No scheme found"
-            xcodebuild -list -workspace "$WORKSPACE"
-            exit 1
-          fi
-
-          echo "✅ Workspace: $WORKSPACE"
-          echo "✅ Scheme: $SCHEME"
-
-          xcodebuild \
-            -workspace "$WORKSPACE" \
-            -scheme "$SCHEME" \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination "generic/platform=iOS" \
-            -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            ENABLE_BITCODE=NO
-
-      - name: Package unsigned IPA
-        shell: bash
-        run: |
-          set -e
-
-          APP_PATH="$(find build/Build/Products -maxdepth 4 -type d -name "*.app" | head -n 1)"
-          if [ -z "$APP_PATH" ]; then
-            echo "❌ Could not find .app"
-            find build -type d -name "*.app"
-            exit 1
-          fi
-
-          echo "✅ App found: $APP_PATH"
-
-          rm -rf Payload
-          mkdir Payload
-          cp -R "$APP_PATH" Payload/
-
-          IPA_NAME="PowerPlantCalculations-unsigned.ipa"
-          /usr/bin/zip -r "$IPA_NAME" Payload
-
-          echo "✅ IPA created: $IPA_NAME"
+          echo "IPA_PATH=$IPA_PATH" >> $GITHUB_ENV
+          echo "✅ Found IPA at $IPA_PATH"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ios-ipa-unsigned
-          path: PowerPlantCalculations-unsigned.ipa
+          name: ios-ipa
+          path: ${{ env.IPA_PATH }}
