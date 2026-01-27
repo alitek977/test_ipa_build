@@ -27,31 +27,32 @@ jobs:
         run: |
           cd ios
           pod install
+          cd ..
 
       - name: Build unsigned .app (Release, iphoneos)
         shell: bash
         run: |
           set -e
 
-          PROJECT="$(ls ios/*.xcodeproj | head -n 1)"
-          if [ -z "$PROJECT" ]; then
-            echo "❌ Could not find ios/*.xcodeproj"
-            ls -la ios || true
+          WORKSPACE="$(ls ios/*.xcworkspace | head -n 1)"
+          if [ -z "$WORKSPACE" ]; then
+            echo "❌ No .xcworkspace found in ios/"
+            ls -la ios
             exit 1
           fi
 
-          SCHEME="$(xcodebuild -list -project "$PROJECT" | awk '/Schemes:/{flag=1;next} flag && NF{print $1; exit}')"
+          SCHEME="$(xcodebuild -list -workspace "$WORKSPACE" | awk '/Schemes:/{flag=1;next} flag && NF{print $1; exit}')"
           if [ -z "$SCHEME" ]; then
-            echo "❌ Could not detect a scheme from project: $PROJECT"
-            xcodebuild -list -project "$PROJECT" || true
+            echo "❌ No scheme found"
+            xcodebuild -list -workspace "$WORKSPACE"
             exit 1
           fi
 
-          echo "✅ Using project: $PROJECT"
-          echo "✅ Using scheme: $SCHEME"
+          echo "✅ Workspace: $WORKSPACE"
+          echo "✅ Scheme: $SCHEME"
 
           xcodebuild \
-            -project "$PROJECT" \
+            -workspace "$WORKSPACE" \
             -scheme "$SCHEME" \
             -configuration Release \
             -sdk iphoneos \
@@ -67,24 +68,23 @@ jobs:
         run: |
           set -e
 
-          APP_PATH="$(find build/Build/Products -maxdepth 3 -type d -name "*.app" | head -n 1)"
+          APP_PATH="$(find build/Build/Products -maxdepth 4 -type d -name "*.app" | head -n 1)"
           if [ -z "$APP_PATH" ]; then
-            echo "❌ Could not find .app product"
-            find build -maxdepth 6 -type d -name "*.app" || true
+            echo "❌ Could not find .app"
+            find build -type d -name "*.app"
             exit 1
           fi
 
-          echo "✅ Found app: $APP_PATH"
+          echo "✅ App found: $APP_PATH"
 
           rm -rf Payload
-          mkdir -p Payload
+          mkdir Payload
           cp -R "$APP_PATH" Payload/
 
           IPA_NAME="PowerPlantCalculations-unsigned.ipa"
-          rm -f "$IPA_NAME"
           /usr/bin/zip -r "$IPA_NAME" Payload
 
-          echo "✅ Created $IPA_NAME"
+          echo "✅ IPA created: $IPA_NAME"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
