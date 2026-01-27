@@ -1,5 +1,6 @@
 name: Build iOS unsigned IPA (Expo EAS local)
-
+env:
+  EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
 on:
   workflow_dispatch:
 
