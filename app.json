@@ -10,7 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.powerplant.calculations"
+      "bundleIdentifier": "com.ainemo.custom.carscvc"
     },
     "android": {
       "adaptiveIcon": {
