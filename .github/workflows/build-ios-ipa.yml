@@ -223,7 +223,10 @@ jobs:
           set -euo pipefail
           cd ios
       
+          echo "✅ Using scheme: $SCHEME"
+      
           xcodebuild \
+            -scheme "$SCHEME" \
             -configuration Release \
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
