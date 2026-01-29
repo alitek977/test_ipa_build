@@ -146,36 +146,6 @@ jobs:
 
           echo "🔎 EXPORT_METHOD=$EXPORT_METHOD"
 
-      - name: Pick correct Xcode scheme (avoid EASClient)
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          WORKSPACE="$(ls ios/*.xcworkspace | head -n 1)"
-          if [ -z "$WORKSPACE" ]; then
-            echo "❌ No .xcworkspace found in ios/"
-            ls -la ios || true
-            exit 1
-          fi
-
-          # Get all schemes
-          SCHEMES="$(xcodebuild -list -workspace "$WORKSPACE" | awk '/Schemes:/{flag=1;next} flag && NF{print $1}')"
-          echo "Schemes:"
-          echo "$SCHEMES"
-
-          # Prefer scheme that is NOT EASClient / Pods
-          SCHEME="$(echo "$SCHEMES" | grep -v -E '^(Pods|EASClient)$' | head -n 1)"
-          if [ -z "$SCHEME" ]; then
-            # fallback first
-            SCHEME="$(echo "$SCHEMES" | head -n 1)"
-          fi
-
-          echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_ENV"
-          echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
-
-          echo "✅ WORKSPACE=$WORKSPACE"
-          echo "✅ SCHEME=$SCHEME"
-
       - name: Generate ExportOptions.plist on runner (validated)
         shell: bash
         run: |
@@ -229,51 +199,34 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          : "${WORKSPACE:?WORKSPACE missing}"
-          : "${SCHEME:?SCHEME missing}"
-
+          cd ios
+      
           xcodebuild \
-            -workspace "$WORKSPACE" \
-            -scheme "$SCHEME" \
             -configuration Release \
             -sdk iphoneos \
             -destination "generic/platform=iOS" \
             -archivePath "$RUNNER_TEMP/App.xcarchive" \
             clean archive \
-            | xcpretty || true
-
-          # If xcodebuild failed, it usually returns nonzero, but xcpretty may swallow.
-          # Check archive exists:
-          if [ ! -d "$RUNNER_TEMP/App.xcarchive" ]; then
-            echo "❌ Archive not found - build failed"
-            exit 1
-          fi
-
-          echo "✅ Archive created"
+            | xcpretty
 
       - name: Export IPA
         shell: bash
         run: |
           set -euo pipefail
-          : "${EXPORT_OPTIONS_PLIST:?EXPORT_OPTIONS_PLIST missing}"
-
+      
           xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/App.xcarchive" \
             -exportPath "$RUNNER_TEMP/export" \
             -exportOptionsPlist "$EXPORT_OPTIONS_PLIST" \
-            | xcpretty || true
-
-          IPA_PATH="$(find "$RUNNER_TEMP/export" -maxdepth 2 -name "*.ipa" | head -n 1)"
+            | xcpretty
+      
+          IPA_PATH=$(find "$RUNNER_TEMP/export" -name "*.ipa" | head -n 1)
           if [ -z "$IPA_PATH" ]; then
-            echo "❌ IPA not found after export"
-            echo "Export dir listing:"
-            ls -la "$RUNNER_TEMP/export" || true
+            echo "❌ IPA not found"
             exit 1
           fi
-
+      
           echo "IPA_PATH=$IPA_PATH" >> "$GITHUB_ENV"
-          echo "✅ IPA at: $IPA_PATH"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
