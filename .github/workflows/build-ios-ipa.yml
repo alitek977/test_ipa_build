@@ -37,6 +37,7 @@ jobs:
         shell: bash
         run: |
           set -e
+          echo "P12_SECRET_LEN=${#IOS_P12_BASE64}"
           CERT_PATH="$RUNNER_TEMP/cert.p12"
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
 
@@ -59,6 +60,7 @@ jobs:
         shell: bash
         run: |
           set -e
+          echo "MOBILEPROVISION_SECRET_LEN=${#IOS_MOBILEPROVISION_BASE64}"
           PP_PATH="$RUNNER_TEMP/profile.mobileprovision"
           echo "$IOS_MOBILEPROVISION_BASE64" | base64 --decode > "$PP_PATH"
 
