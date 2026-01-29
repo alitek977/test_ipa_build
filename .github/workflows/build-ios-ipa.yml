@@ -91,25 +91,44 @@ jobs:
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$PP_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
           echo "✅ Installed provisioning profile UUID: $UUID"
-
+          
       - name: Build Archive (Release)
         shell: bash
         run: |
           set -euo pipefail
-          WORKSPACE="$(ls ios/*.xcworkspace | head -n 1)"
-          SCHEME="$(xcodebuild -list -workspace "$WORKSPACE" | awk '/Schemes:/{flag=1;next} flag && NF{print $1; exit}')"
 
-          echo "Workspace: $WORKSPACE"
-          echo "Scheme: $SCHEME"
+          echo "🔍 Searching for workspace or project..."
 
-          xcodebuild \
-            -workspace "$WORKSPACE" \
-            -scheme "$SCHEME" \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination "generic/platform=iOS" \
-            -archivePath "$RUNNER_TEMP/App.xcarchive" \
-            archive
+          if ls ios/*.xcworkspace >/dev/null 2>&1; then
+            WORKSPACE="$(ls ios/*.xcworkspace | head -n 1)"
+            echo "✅ Using workspace: $WORKSPACE"
+
+            SCHEME="$(xcodebuild -list -workspace "$WORKSPACE" | awk '/Schemes:/{flag=1;next} flag && NF{print $1; exit}')"
+
+            xcodebuild \
+              -workspace "$WORKSPACE" \
+              -scheme "$SCHEME" \
+              -configuration Release \
+              -sdk iphoneos \
+              -destination "generic/platform=iOS" \
+              -archivePath "$RUNNER_TEMP/App.xcarchive" \
+              archive
+
+          else
+            PROJECT="$(ls ios/*.xcodeproj | head -n 1)"
+            echo "⚠️ Workspace not found, using project: $PROJECT"
+
+            SCHEME="$(xcodebuild -list -project "$PROJECT" | awk '/Schemes:/{flag=1;next} flag && NF{print $1; exit}')"
+
+            xcodebuild \
+              -project "$PROJECT" \
+              -scheme "$SCHEME" \
+              -configuration Release \
+              -sdk iphoneos \
+              -destination "generic/platform=iOS" \
+              -archivePath "$RUNNER_TEMP/App.xcarchive" \
+              archive
+          fi
 
       - name: Export IPA
         shell: bash
