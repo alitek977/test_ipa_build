@@ -97,16 +97,28 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "🔍 Searching for workspace or project..."
+          echo "🔍 Searching for Xcode workspace or project..."
 
-          if ls ios/*.xcworkspace >/dev/null 2>&1; then
-            WORKSPACE="$(ls ios/*.xcworkspace | head -n 1)"
-            echo "✅ Using workspace: $WORKSPACE"
+          WORKSPACE_DIR=""
+          PROJECT_FILE=""
 
-            SCHEME="$(xcodebuild -list -workspace "$WORKSPACE" | awk '/Schemes:/{flag=1;next} flag && NF{print $1; exit}')"
+          # Find workspace directory (not contents.xcworkspacedata)
+          for w in ios/*.xcworkspace; do
+            if [ -d "$w" ]; then
+              WORKSPACE_DIR="$w"
+              break
+            fi
+          done
+
+          if [ -n "$WORKSPACE_DIR" ]; then
+            echo "✅ Using workspace: $WORKSPACE_DIR"
+
+            SCHEME="$(xcodebuild -list -workspace "$WORKSPACE_DIR" | awk '/Schemes:/{flag=1;next} flag && NF{print $1; exit}')"
+
+            echo "Scheme: $SCHEME"
 
             xcodebuild \
-              -workspace "$WORKSPACE" \
+              -workspace "$WORKSPACE_DIR" \
               -scheme "$SCHEME" \
               -configuration Release \
               -sdk iphoneos \
@@ -115,13 +127,15 @@ jobs:
               archive
 
           else
-            PROJECT="$(ls ios/*.xcodeproj | head -n 1)"
-            echo "⚠️ Workspace not found, using project: $PROJECT"
+            PROJECT_FILE="$(ls ios/*.xcodeproj | head -n 1)"
+            echo "⚠️ Workspace not found, using project: $PROJECT_FILE"
 
-            SCHEME="$(xcodebuild -list -project "$PROJECT" | awk '/Schemes:/{flag=1;next} flag && NF{print $1; exit}')"
+            SCHEME="$(xcodebuild -list -project "$PROJECT_FILE" | awk '/Schemes:/{flag=1;next} flag && NF{print $1; exit}')"
+
+            echo "Scheme: $SCHEME"
 
             xcodebuild \
-              -project "$PROJECT" \
+              -project "$PROJECT_FILE" \
               -scheme "$SCHEME" \
               -configuration Release \
               -sdk iphoneos \
