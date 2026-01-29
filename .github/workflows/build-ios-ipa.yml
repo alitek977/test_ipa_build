@@ -224,9 +224,6 @@ jobs:
           cd ios
       
           echo "Using scheme: $SCHEME"
-          echo "Using TEAM_ID: $TEAM_ID"
-          echo "Using PROFILE_NAME: $PROFILE_NAME"
-          echo "Using BUNDLE_ID: $BUNDLE_ID"
       
           xcodebuild \
             -scheme "$SCHEME" \
@@ -236,10 +233,11 @@ jobs:
             -archivePath "$RUNNER_TEMP/App.xcarchive" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
             CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="iOS Distribution" \
             PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
             PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
             clean archive
-
+      
       - name: Export IPA
         shell: bash
         run: |
