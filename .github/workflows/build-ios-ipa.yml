@@ -1,4 +1,4 @@
-name: Build iOS SIGNED IPA (Enterprise)
+name: Build iOS IPA (Expo) - Signed
 
 on:
   workflow_dispatch:
@@ -32,7 +32,7 @@ jobs:
           pod install
           cd ..
 
-      - name: Install signing cert into keychain (robust)
+      - name: Import P12 into temporary keychain
         shell: bash
         env:
           IOS_P12_BASE64: ${{ secrets.IOS_P12_BASE64 }}
@@ -44,15 +44,11 @@ jobs:
           CERT_PATH="$RUNNER_TEMP/cert.p12"
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
 
-          # Decode P12 (robust)
           (printf '%s' "$IOS_P12_BASE64" | base64 --decode > "$CERT_PATH" 2>/dev/null) \
             || (printf '%s' "$IOS_P12_BASE64" | base64 -D > "$CERT_PATH")
 
           echo "P12_SIZE=$(wc -c < "$CERT_PATH")"
-          if [ ! -s "$CERT_PATH" ]; then
-            echo "❌ Decoded P12 is empty. Check IOS_P12_BASE64."
-            exit 1
-          fi
+          [ -s "$CERT_PATH" ] || (echo "❌ P12 decode failed" && exit 1)
 
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
@@ -64,11 +60,9 @@ jobs:
           security default-keychain -s "$KEYCHAIN_PATH"
 
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "✅ Certificate imported"
 
-          echo "✅ P12 imported into keychain"
-
-      - name: Install provisioning profile + extract values (robust)
-        id: profile
+      - name: Install provisioning profile + extract TEAM_ID / PROFILE_NAME / BUNDLE_ID
         shell: bash
         env:
           IOS_MOBILEPROVISION_BASE64: ${{ secrets.IOS_MOBILEPROVISION_BASE64 }}
@@ -78,17 +72,12 @@ jobs:
           PP_PATH="$RUNNER_TEMP/profile.mobileprovision"
           PP_PLIST="$RUNNER_TEMP/profile.plist"
 
-          # Decode mobileprovision (robust)
           (printf '%s' "$IOS_MOBILEPROVISION_BASE64" | base64 --decode > "$PP_PATH" 2>/dev/null) \
             || (printf '%s' "$IOS_MOBILEPROVISION_BASE64" | base64 -D > "$PP_PATH")
 
           echo "PP_SIZE=$(wc -c < "$PP_PATH")"
-          if [ ! -s "$PP_PATH" ]; then
-            echo "❌ Decoded mobileprovision is empty. Check IOS_MOBILEPROVISION_BASE64."
-            exit 1
-          fi
+          [ -s "$PP_PATH" ] || (echo "❌ mobileprovision decode failed" && exit 1)
 
-          # Decode CMS to plist
           security cms -D -i "$PP_PATH" > "$PP_PLIST"
 
           UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$PP_PLIST")
@@ -100,14 +89,66 @@ jobs:
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
           cp "$PP_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
 
-          echo "✅ Installed provisioning profile UUID: $UUID"
-          echo "🔎 TEAM_ID=$TEAM_ID"
-          echo "🔎 PROFILE_NAME=$PROFILE_NAME"
-          echo "🔎 BUNDLE_ID=$BUNDLE_ID"
-
           echo "TEAM_ID=$TEAM_ID" >> "$GITHUB_ENV"
           echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
           echo "BUNDLE_ID=$BUNDLE_ID" >> "$GITHUB_ENV"
+
+          echo "✅ Installed provisioning profile: $PROFILE_NAME"
+          echo "🔎 TEAM_ID=$TEAM_ID"
+          echo "🔎 BUNDLE_ID=$BUNDLE_ID"
+
+          # Auto-detect export method from profile (Enterprise/AdHoc/Dev/AppStore)
+          PROVIDES_ALL_DEVICES=$(/usr/libexec/PlistBuddy -c 'Print :ProvisionsAllDevices' "$PP_PLIST" 2>/dev/null || echo "false")
+          HAS_PROVISIONED_DEVICES=$(/usr/libexec/PlistBuddy -c 'Print :ProvisionedDevices:0' "$PP_PLIST" >/dev/null 2>&1 && echo "true" || echo "false")
+          GET_TASK_ALLOW=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:get-task-allow' "$PP_PLIST" 2>/dev/null || echo "false")
+
+          METHOD="app-store"
+          if [ "$PROVIDES_ALL_DEVICES" = "true" ]; thenMETHOD="enterprise"
+          elif [ "$HAS_PROVISIONED_DEVICES" = "true" ]; then
+            METHOD="ad-hoc"
+          elif [ "$GET_TASK_ALLOW" = "true" ]; then
+            METHOD="development"
+          fi
+
+          echo "EXPORT_METHOD=$METHOD" >> "$GITHUB_ENV"
+          echo "🔎 EXPORT_METHOD=$METHOD"
+
+      - name: Pick correct Xcode scheme (avoid EASClient)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          WORKSPACE=""
+          for w in ios/*.xcworkspace; do
+            if [ -d "$w" ]; then WORKSPACE="$w"; break; fi
+          done
+          [ -n "$WORKSPACE" ] || (echo "❌ No .xcworkspace found under ios/" && ls -la ios && exit 1)
+
+          echo "WORKSPACE=$WORKSPACE" >> "$GITHUB_ENV"
+          echo "Workspace: $WORKSPACE"
+
+          # Get schemes; exclude Pods / EASClient / Tests
+          SCHEMES=$(xcodebuild -list -workspace "$WORKSPACE" | awk '/Schemes:/{flag=1;next} flag && NF{print $1}')
+          echo "All schemes:"
+          echo "$SCHEMES"
+
+          # Prefer scheme that matches app name keywords
+          PICKED=$(echo "$SCHEMES" \
+            | grep -Ev '^(Pods|EASClient|.*Tests)$' \
+            | grep -Ei '(power|plant|calculat)' \
+            | head -n 1 || true)
+
+          if [ -z "$PICKED" ]; then
+            PICKED=$(echo "$SCHEMES" | grep -Ev '^(Pods|EASClient|.*Tests)$' | head -n 1 || true)
+          fi
+
+          if [ -z "$PICKED" ]; then
+            echo "❌ Could not pick a valid scheme. Please rename your app scheme or specify it manually."
+            exit 1
+          fi
+
+          echo "SCHEME=$PICKED" >> "$GITHUB_ENV"
+          echo "✅ Picked scheme: $PICKED"
 
       - name: Generate ExportOptions.plist on runner (validated)
         shell: bash
@@ -120,7 +161,7 @@ jobs:
           <plist version="1.0">
           <dict>
             <key>method</key>
-            <string>enterprise</string>
+            <string>${EXPORT_METHOD}</string>
 
             <key>signingStyle</key>
             <string>manual</string>
@@ -143,55 +184,23 @@ jobs:
           PLIST
 
           /usr/bin/plutil -lint "$RUNNER_TEMP/ExportOptions.plist"
-          echo "✅ ExportOptions.plist generated & valid"
+          echo "✅ ExportOptions.plist generated"
 
-      - name: Build Archive (workspace or project)
+      - name: Build Archive (Release)
         shell: bash
         run: |
           set -euo pipefail
-
-          WORKSPACE_DIR=""
-          for w in ios/*.xcworkspace; do
-            if [ -d "$w" ]; then
-              WORKSPACE_DIR="$w"
-              break
-            fi
-          done
-
-          if [ -n "$WORKSPACE_DIR" ]; then
-            echo "✅ Using workspace: $WORKSPACE_DIR"
-            SCHEME="$(xcodebuild -list -workspace "$WORKSPACE_DIR" | awk '/Schemes:/{flag=1;next} flag && NF{print $1; exit}')"
-            echo "Scheme: $SCHEME"
-
-            xcodebuild \
-              -workspace "$WORKSPACE_DIR" \
-              -scheme "$SCHEME" \
-              -configuration Release \
-              -sdk iphoneos \
-              -destination "generic/platform=iOS" \
-              -archivePath "$RUNNER_TEMP/App.xcarchive" \
-              archive \
-              CODE_SIGN_STYLE=Manual \
-              DEVELOPMENT_TEAM="$TEAM_ID" \
-              PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME"
-          else
-            PROJECT_FILE="$(ls ios/*.xcodeproj | head -n 1)"
-            echo "⚠️ Workspace not found, using project: $PROJECT_FILE"
-            SCHEME="$(xcodebuild -list -project "$PROJECT_FILE" | awk '/Schemes:/{flag=1;next} flag && NF{print $1; exit}')"
-            echo "Scheme: $SCHEME"
-
-            xcodebuild \
-              -project "$PROJECT_FILE" \
-              -scheme "$SCHEME" \
-              -configuration Release \
-              -sdk iphoneos \
-              -destination "generic/platform=iOS" \
-              -archivePath "$RUNNER_TEMP/App.xcarchive" \
-              archive \
-              CODE_SIGN_STYLE=Manual \
-              DEVELOPMENT_TEAM="$TEAM_ID" \
-              PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME"
-          fi
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            archive \
+            CODE_SIGN_STYLE=Manual \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME"
 
           echo "✅ Archive created"
 
