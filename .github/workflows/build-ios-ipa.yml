@@ -73,33 +73,75 @@ jobs:
           echo "✅ Certificate imported"
           echo "🔎 Available identities:"
           security find-identity -v -p codesigning
-
-      - name: Install provisioning profile + extract TEAM_ID / BUNDLE_ID / PROFILE_NAME / EXPORT_METHOD
+      - name: Install provisioning profile + extract TEAM_ID / BUNDLE_ID / PROFILE_NAME / EXPORT_METHOD (robust)
         shell: bash
+        env:
+          IOS_MOBILEPROVISION_BASE64: ${{ secrets.IOS_MOBILEPROVISION_BASE64 }}
         run: |
           set -euo pipefail
 
+          if [ -z "${IOS_MOBILEPROVISION_BASE64:-}" ]; then
+            echo "❌ IOS_MOBILEPROVISION_BASE64 secret is empty"
+            exit 1
+          fi
+
+          echo "🔎 MOBILEPROVISION_SECRET_LEN=${#IOS_MOBILEPROVISION_BASE64}"
+
           PP_PATH="$RUNNER_TEMP/profile.mobileprovision"
-          echo "${{ secrets.IOS_MOBILEPROVISION_BASE64 }}" | base64 --decode > "$PP_PATH"
+
+          # ✅ Robust base64 decode (no CLI base64 issues)
+          python3 - <<'PY'
+          import os, base64, sys
+          s = os.environ["IOS_MOBILEPROVISION_BASE64"].strip()
+          try:
+            data = base64.b64decode(s, validate=True)
+          except Exception as e:
+            print("❌ Base64 decode failed:", e)
+            sys.exit(2)
+
+          out = os.environ["PP_PATH"] if "PP_PATH" in os.environ else None
+          if not out:
+            out = os.path.join(os.environ["RUNNER_TEMP"], "profile.mobileprovision")
+
+          with open(out, "wb") as f:
+            f.write(data)
+
+          if len(data) < 1000:
+            print(f"❌ Decoded mobileprovision is too small: {len(data)} bytes")
+            sys.exit(3)
+
+          print(f"✅ Decoded mobileprovision size: {len(data)} bytes -> {out}")
+          PY
+          export PP_PATH
+
+          ls -la "$PP_PATH"
+
+          # Parse it
+          PLIST_XML="$(/usr/bin/security cms -D -i "$PP_PATH" || true)"
+          if [ -z "$PLIST_XML" ]; then
+            echo "❌ security cms returned empty output (invalid .mobileprovision)"
+            exit 4
+          fi
 
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-          UUID=$(/usr/bin/security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c 'Print :UUID' /dev/stdin)
+          UUID=$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :UUID' /dev/stdin)
           cp "$PP_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
           echo "✅ Installed provisioning profile UUID: $UUID"
 
-          TEAM_ID=$(/usr/bin/security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' /dev/stdin)
-          PROFILE_NAME=$(/usr/bin/security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c 'Print :Name' /dev/stdin)
-          APP_ID=$(/usr/bin/security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' /dev/stdin)
+          TEAM_ID=$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' /dev/stdin)
+          PROFILE_NAME=$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :Name' /dev/stdin)
+          APP_ID=$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' /dev/stdin)
           BUNDLE_ID="${APP_ID#${TEAM_ID}.}"
 
           EXPORT_METHOD="ad-hoc"
-          if /usr/bin/security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c 'Print :ProvisionsAllDevices' /dev/stdin >/dev/null 2>&1; then
-            VAL=$(/usr/bin/security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c 'Print :ProvisionsAllDevices' /dev/stdin || true)
+          if echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :ProvisionsAllDevices' /dev/stdin >/dev/null 2>&1; then
+            VAL=$(echo "$PLIST_XML" | /usr/libexec/PlistBuddy -c 'Print :ProvisionsAllDevices' /dev/stdin || true)
             if [ "$VAL" = "true" ]; then EXPORT_METHOD="enterprise"; fi
           fi
 
           echo "TEAM_ID=$TEAM_ID" >> "$GITHUB_ENV"
-          echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"echo "BUNDLE_ID=$BUNDLE_ID" >> "$GITHUB_ENV"
+          echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
+          echo "BUNDLE_ID=$BUNDLE_ID" >> "$GITHUB_ENV"
           echo "EXPORT_METHOD=$EXPORT_METHOD" >> "$GITHUB_ENV"
 
           echo "🔎 TEAM_ID=$TEAM_ID"
@@ -107,6 +149,7 @@ jobs:
           echo "🔎 BUNDLE_ID=$BUNDLE_ID"
           echo "🔎 EXPORT_METHOD=$EXPORT_METHOD"
 
+          
       - name: Detect correct Xcode scheme (exclude EASClient)
         shell: bash
         run: |
