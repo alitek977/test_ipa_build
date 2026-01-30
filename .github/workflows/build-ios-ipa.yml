@@ -149,39 +149,40 @@ jobs:
           echo "🔎 BUNDLE_ID=$BUNDLE_ID"
           echo "🔎 EXPORT_METHOD=$EXPORT_METHOD"
 
-      - name: Detect correct Xcode scheme (exclude EASClient) - robust
+      - name: Detect correct Xcode scheme (exclude EASClient) - strict
         shell: bash
         run: |
           set -euo pipefail
           cd ios
-
-          # Prefer workspace if exists (after CocoaPods)
-          WORKSPACE="$(ls -1 *.xcworkspace 2>/dev/null | head -n 1 || true)"
-          PROJECT="$(ls -1 *.xcodeproj 2>/dev/null | head -n 1 || true)"
-
+      
+          # ONLY accept real workspace directories (*.xcworkspace is a directory)
+          WORKSPACE="$(find . -maxdepth 1 -type d -name '*.xcworkspace' -print | head -n 1 | sed 's|^\./||' || true)"
+          PROJECT="$(find . -maxdepth 1 -type d -name '*.xcodeproj' -print | head -n 1 | sed 's|^\./||' || true)"
+      
           if [ -n "$WORKSPACE" ]; then
-            echo "✅ Using workspace: $WORKSPACE"
+            echo "✅ Using workspace dir: $WORKSPACE"
             LIST_CMD=(xcodebuild -list -workspace "$WORKSPACE")
           elif [ -n "$PROJECT" ]; then
-            echo "✅ Using project: $PROJECT"
+            echo "✅ Using project dir: $PROJECT"
             LIST_CMD=(xcodebuild -list -project "$PROJECT")
           else
-            echo "❌ No .xcworkspace or .xcodeproj found in ios/"
+            echo "❌ No .xcworkspace (dir) or .xcodeproj (dir) found in ios/"
+            echo "📦 Debug list:"
             ls -la
+            find . -maxdepth 2 -print
             exit 1
           fi
-
-          # Extract schemes, exclude EASClient, pick first
+      
           SCHEME="$("${LIST_CMD[@]}" | awk '/Schemes:/{flag=1;next} flag && NF{print $1}' | grep -v '^EASClient$' | head -n 1 || true)"
-
+      
           if [ -z "$SCHEME" ]; then
             echo "❌ Could not detect a valid scheme (after excluding EASClient)."
             "${LIST_CMD[@]}" || true
             exit 1
           fi
-
+      
           echo "✅ Using scheme: $SCHEME"
-          echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"    
+          echo "SCHEME=$SCHEME" >> "$GITHUB_ENV"
 
       
       - name: Choose CODE_SIGN_IDENTITY automatically
@@ -205,16 +206,18 @@ jobs:
         run: |
           set -euo pipefail
           cd ios
-
-          WORKSPACE="$(ls -1 *.xcworkspace 2>/dev/null | head -n 1 || true)"
-          PROJECT="$(ls -1 *.xcodeproj 2>/dev/null | head -n 1 || true)"
-
+      
+          WORKSPACE="$(find . -maxdepth 1 -type d -name '*.xcworkspace' -print | head -n 1 | sed 's|^\./||' || true)"
+          PROJECT="$(find . -maxdepth 1 -type d -name '*.xcodeproj' -print | head -n 1 | sed 's|^\./||' || true)"
+      
           if [ -n "$WORKSPACE" ]; then
             BUILD_BASE=(xcodebuild -workspace "$WORKSPACE")
+            echo "✅ Archiving with workspace: $WORKSPACE"
           else
             BUILD_BASE=(xcodebuild -project "$PROJECT")
+            echo "✅ Archiving with project: $PROJECT"
           fi
-
+      
           "${BUILD_BASE[@]}" \
             -scheme "$SCHEME" \
             -configuration Release \
