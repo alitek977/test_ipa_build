@@ -1,11 +1,11 @@
-name: Build iOS SIGNED IPA (Enterprise)
+name: Build iOS Signed IPA (Expo)
 
 on:
   workflow_dispatch:
 
 jobs:
   build-ios:
-    runs-on: macos-latest
+    runs-on: macos-14
 
     steps:
       - name: Checkout
@@ -20,89 +20,93 @@ jobs:
       - name: Install JS deps
         run: npm ci
 
+      # لو مشروعك يحتاج prebuild لتوليد ios/ (Expo)
       - name: Expo prebuild (iOS)
-        run: npx expo prebuild -p ios --non-interactive
+        run: npx expo prebuild --platform ios --non-interactive
 
       - name: Install CocoaPods
         run: |
           cd ios
-          pod install
-          cd ..
+          pod install --repo-update
 
       - name: Install signing cert into keychain
         shell: bash
-        env:
-          IOS_P12_BASE64: ${{ secrets.IOS_P12_BASE64 }}
-          IOS_P12_PASSWORD: ${{ secrets.IOS_P12_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: |
           set -euo pipefail
 
           CERT_PATH="$RUNNER_TEMP/cert.p12"
           KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="temp_keychain_password"
 
-          echo "$IOS_P12_BASE64" | base64 --decode > "$CERT_PATH"
+          echo "${{ secrets.IOS_P12_BASE64 }}" | base64 --decode > "$CERT_PATH"
 
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          # Import cert
-          security import "$CERT_PATH" -P "$IOS_P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "${{ secrets.IOS_P12_PASSWORD }}" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
 
           security list-keychains -d user -s "$KEYCHAIN_PATH"
           security default-keychain -s "$KEYCHAIN_PATH"
 
-          # Allow codesign/xcodebuild access
+          # مهم عشان xcodebuild يقدر يستخدم المفتاح
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
           echo "✅ Certificate imported"
-          echo "🔎 Available code signing identities:"
-          security find-identity -v -p codesigning "$KEYCHAIN_PATH" || true
+          echo "🔎 Available identities:"
+          security find-identity -v -p codesigning
 
-      - name: Install provisioning profile + extract TEAM_ID / PROFILE_NAME / BUNDLE_ID
+      - name: Install provisioning profile + extract TEAM_ID / BUNDLE_ID / PROFILE_NAME / EXPORT_METHOD
         shell: bash
-        env:
-          IOS_MOBILEPROVISION_BASE64: ${{ secrets.IOS_MOBILEPROVISION_BASE64 }}
         run: |
           set -euo pipefail
 
           PP_PATH="$RUNNER_TEMP/profile.mobileprovision"
-          echo "$IOS_MOBILEPROVISION_BASE64" | base64 --decode > "$PP_PATH"
+          echo "${{ secrets.IOS_MOBILEPROVISION_BASE64 }}" | base64 --decode > "$PP_PATH"
 
           mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
-          UUID=$(security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c 'Print :UUID' /dev/stdin)
+          UUID=$(/usr/bin/security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c 'Print :UUID' /dev/stdin)
           cp "$PP_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
+          echo "✅ Installed provisioning profile UUID: $UUID"
 
-          TEAM_ID=$(security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' /dev/stdin)
-          PROFILE_NAME=$(security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c 'Print :Name' /dev/stdin)
-          APP_ID=$(security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' /dev/stdin)
+          TEAM_ID=$(/usr/bin/security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' /dev/stdin)
+          PROFILE_NAME=$(/usr/bin/security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c 'Print :Name' /dev/stdin)
+          APP_ID=$(/usr/bin/security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' /dev/stdin)
           BUNDLE_ID="${APP_ID#${TEAM_ID}.}"
+
+          # تحديد نوع التوزيع من البروفايل:
+          # لو ProvisionsAllDevices = true -> enterprise
+          # غير ذلك غالبًا ad-hoc / app-store
+          EXPORT_METHOD="ad-hoc"
+          if /usr/bin/security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c 'Print :ProvisionsAllDevices' /dev/stdin >/dev/null 2>&1; then
+            VAL=$(/usr/bin/security cms -D -i "$PP_PATH" | /usr/libexec/PlistBuddy -c 'Print :ProvisionsAllDevices' /dev/stdin || true)
+            if [ "$VAL" = "true" ]; then EXPORT_METHOD="enterprise"; fi
+          fi
 
           echo "TEAM_ID=$TEAM_ID" >> "$GITHUB_ENV"
           echo "PROFILE_NAME=$PROFILE_NAME" >> "$GITHUB_ENV"
           echo "BUNDLE_ID=$BUNDLE_ID" >> "$GITHUB_ENV"
+          echo "EXPORT_METHOD=$EXPORT_METHOD" >> "$GITHUB_ENV"
 
-          echo "✅ Installed provisioning profile UUID: $UUID"
           echo "🔎 TEAM_ID=$TEAM_ID"
           echo "🔎 PROFILE_NAME=$PROFILE_NAME"
           echo "🔎 BUNDLE_ID=$BUNDLE_ID"
+          echo "🔎 EXPORT_METHOD=$EXPORT_METHOD"
 
       - name: Detect correct Xcode scheme (exclude EASClient)
         shell: bash
         run: |
           set -euo pipefail
+
           WORKSPACE="$(ls ios/*.xcworkspace | head -n 1)"
           echo "Workspace: $WORKSPACE"
 
-          SCHEME="$(xcodebuild -list -workspace "$WORKSPACE" \
-            | awk '/Schemes:/{flag=1;next} flag && NF{print $1}' \
-            | grep -v '^EASClient$' \
-            | head -n 1)"
+          # استخراج أول Scheme غير EASClient
+          SCHEME=$(/usr/bin/xcodebuild -list -workspace "$WORKSPACE" | \awk '/Schemes:/{flag=1;next} flag && NF{print $1}' | \
+            grep -v '^EASClient$' | head -n 1)
 
           if [ -z "$SCHEME" ]; then
-            echo "❌ Could not detect scheme"
-            xcodebuild -list -workspace "$WORKSPACE"
+            echo "❌ Could not detect a valid scheme"
             exit 1
           fi
 
@@ -114,41 +118,29 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Prefer Apple Distribution (new name).
-          Fallback to iOS Distribution (old name).
-          if security find-identity -v -p codesigning | grep -q "Apple Distribution"; then
-            echo "CODE_SIGN_IDENTITY=Apple Distribution" >> "$GITHUB_ENV"
-            echo "✅ CODE_SIGN_IDENTITY=Apple Distribution"
-          elif security find-identity -v -p codesigning | grep -q "iOS Distribution"; then
-            echo "CODE_SIGN_IDENTITY=iOS Distribution" >> "$GITHUB_ENV"
-            echo "✅ CODE_SIGN_IDENTITY=iOS Distribution"
-          else
-            echo "❌ No Distribution certificate found in keychain."
-            echo "You MUST provide a P12 that includes Apple/iOS Distribution cert for your TEAM."
-            security find-identity -v -p codesigning || true
+          # خذ أول هوية Distribution موجودة (Apple Distribution أو iPhone Distribution)
+          IDENTITY=$(security find-identity -v -p codesigning | \
+            sed -n 's/.*"\(Apple Distribution:.*\)"/\1/p; s/.*"\(iPhone Distribution:.*\)"/\1/p' | head -n 1)
+
+          if [ -z "$IDENTITY" ]; then
+            echo "❌ No Distribution identity found in keychain"
+            security find-identity -v -p codesigning
             exit 1
           fi
 
+          echo "CODE_SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
+          echo "✅ CODE_SIGN_IDENTITY=$IDENTITY"
+
       - name: Build Archive (Release)
         shell: bash
-        env:
-          TEAM_ID: ${{ env.TEAM_ID }}
-          BUNDLE_ID: ${{ env.BUNDLE_ID }}
-          PROFILE_NAME: ${{ env.PROFILE_NAME }}
-          SCHEME: ${{ env.SCHEME }}
-          CODE_SIGN_IDENTITY: ${{ env.CODE_SIGN_IDENTITY }}
         run: |
           set -euo pipefail
+
           WORKSPACE="$(ls ios/*.xcworkspace | head -n 1)"
+          echo "Using workspace: $WORKSPACE"
+          echo "Using scheme: $SCHEME"
 
-          echo "Workspace: $WORKSPACE"
-          echo "Scheme: $SCHEME"
-          echo "Signing: $CODE_SIGN_IDENTITY"
-          echo "Team: $TEAM_ID"
-          echo "Bundle: $BUNDLE_ID"
-          echo "Profile: $PROFILE_NAME"
-
-          xcodebuild \
+          /usr/bin/xcodebuild \
             -workspace "$WORKSPACE" \
             -scheme "$SCHEME" \
             -configuration Release \
@@ -157,57 +149,57 @@ jobs:
             -archivePath "$RUNNER_TEMP/App.xcarchive" \
             DEVELOPMENT_TEAM="$TEAM_ID" \
             CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="$CODE_SIGN_IDENTITY" \
+            "CODE_SIGN_IDENTITY=$CODE_SIGN_IDENTITY" \
             PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
             PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
-            clean archive
+            clean archive \
+            | xcpretty
 
-      - name: Generate ExportOptions.plist (Enterprise)
+      - name: Generate ExportOptions.plist on runner (validated)
         shell: bash
-        env:
-          TEAM_ID: ${{ env.TEAM_ID }}
-          BUNDLE_ID: ${{ env.BUNDLE_ID }}
-          PROFILE_NAME: ${{ env.PROFILE_NAME }}
         run: |
           set -euo pipefail
-          PLIST="$RUNNER_TEMP/ExportOptions.plist"
 
+          PLIST="$RUNNER_TEMP/ExportOptions.plist"
           /usr/libexec/PlistBuddy -c "Clear dict" "$PLIST" 2>/dev/null || true
-          /usr/libexec/PlistBuddy -c "Add :teamID string $TEAM_ID" "$PLIST"
+
+          /usr/libexec/PlistBuddy -c "Add :method string $EXPORT_METHOD" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :signingStyle string manual" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Add :method string enterprise" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :teamID string $TEAM_ID" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :stripSwiftSymbols bool true" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :compileBitcode bool false" "$PLIST"
+
           /usr/libexec/PlistBuddy -c "Add :provisioningProfiles dict" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :provisioningProfiles:$BUNDLE_ID string $PROFILE_NAME" "$PLIST"
 
-          /usr/libexec/PlistBuddy -c "Print" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Print" "$PLIST" >/dev/null
           plutil -lint "$PLIST"
 
           echo "EXPORT_OPTIONS_PLIST=$PLIST" >> "$GITHUB_ENV"
+          echo "✅ ExportOptions.plist generated at $PLIST"
+          /usr/libexec/PlistBuddy -c "Print" "$PLIST"
 
       - name: Export IPA
         shell: bash
-        env:
-          EXPORT_OPTIONS_PLIST: ${{ env.EXPORT_OPTIONS_PLIST }}
         run: |
           set -euo pipefail
 
-          xcodebuild -exportArchive \
+          EXPORT_DIR="$RUNNER_TEMP/export"
+          mkdir -p "$EXPORT_DIR"
+
+          /usr/bin/xcodebuild -exportArchive \
             -archivePath "$RUNNER_TEMP/App.xcarchive" \
-            -exportPath "$RUNNER_TEMP/export" \
-            -exportOptionsPlist "$EXPORT_OPTIONS_PLIST"
+            -exportOptionsPlist "$EXPORT_OPTIONS_PLIST" \
+            -exportPath "$EXPORT_DIR" \
+            | xcpretty
 
-          IPA_PATH="$(find "$RUNNER_TEMP/export" -maxdepth 2 -name "*.ipa" | head -n 1)"
-          if [ -z "$IPA_PATH" ]; then
-            echo "❌ IPA not found after export"
-            ls -la "$RUNNER_TEMP/export" || true
-            exit 1
-          fi
-
-          echo "IPA_PATH=$IPA_PATH" >> "$GITHUB_ENV"
-          echo "✅ IPA at: $IPA_PATH"
+          echo "✅ Export finished"
+          ls -la "$EXPORT_DIR"
 
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ios-ipa-signed
-          path: ${{ env.IPA_PATH }}
+          name: PowerPlantCalculations-ipa
+          path: |
+            ${{ runner.temp }}/export/*.ipa
+            ${{ runner.temp }}/export/*.dSYM
